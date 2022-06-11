@@ -15,63 +15,38 @@ from bs4 import BeautifulSoup
 from selenium.webdriver.chrome.service import Service
 import time
 from datetime import datetime
-import yagmail
 from os.path import exists
 import os
-from IPython.display import clear_output
-
-
-# In[2]:
-
+import mysql.connector
+import json
+from mysql.connector import Error
 
 logging.basicConfig(filename='logs/scratchoff runtime_{}.log'.format(datetime.now().strftime("%Y-%m-%d %H_%M_%S")),
                         encoding='utf-8', level=logging.INFO)
 
-
-# In[3]:
-
-
 url = 'https://www.njlottery.com/en-us/scratch-offs/active.html#tab-active'
 
-
-# In[4]:
-
+base = 'https://www.njlottery.com/en-us/scratch-offs/{}.html'
+credentials = None
+with open("db_credentials.json", 'r') as f:
+    credentials = json.load(f)
 
 options = Options()
-#options.headless = True
+options.headless = True
 
 s = Service('chromedriver.exe')
 driver = webdriver.Chrome(service=s,options=options)
 driver.maximize_window()
 rep= pd.DataFrame(columns=['File','Updated'])
 
-
-# In[5]:
-
-
 driver.get(url)
-
-
-# In[6]:
-
 
 e = driver.find_element(By.XPATH, '//*[@id="instantsGames-ACTIVE"]')
 logging.info("Got WebElement from website")
 
-
-# In[7]:
-
-
 html_data = e.get_attribute('innerHTML')
 
-
-# In[8]:
-
-
-data = BeautifulSoup(html_data)
-
-
-# In[9]:
+data = BeautifulSoup(html_data, features='lxml')
 
 
 data.find_all('p')[0]
@@ -209,7 +184,6 @@ df.index
 # In[25]:
 
 
-base = 'https://www.njlottery.com/en-us/scratch-offs/{}.html'
 
 
 frames = []
@@ -217,7 +191,6 @@ _i=1
 for g in df.index:
     url = base.format(g)
     driver.get(url)
-    clear_output(wait=True)
     print(g)
     print(round(float(_i)/df.shape[0]*100,2),"%")
     _i+=1
@@ -234,7 +207,7 @@ for g in df.index:
     #driver.get('https://www.njlottery.com/en-us/scratch-offs/01683.html')
     e = driver.find_element(By.XPATH, '/html/body')
     html_data= e.get_attribute('innerHTML')
-    bdata = BeautifulSoup(html_data)
+    bdata = BeautifulSoup(html_data, features='lxml')
 
     for p in bdata.find_all('p'):
         if 'Approximately' in p.get_text():
@@ -248,12 +221,12 @@ for g in df.index:
     
     e = driver.find_element(By.XPATH, time_start)
     html_data= e.get_attribute('innerHTML')
-    bdata = BeautifulSoup(html_data)
+    bdata = BeautifulSoup(html_data, features='lxml')
     new_data['StartDate'] = bdata.get_text().strip()
     
     e = driver.find_element(By.XPATH, price)
     html_data= e.get_attribute('innerHTML')
-    bdata = BeautifulSoup(html_data)
+    bdata = BeautifulSoup(html_data, features='lxml')
     new_data['Price'] = bdata.get_text().strip()
     
     frames.append(new_data)
@@ -374,7 +347,7 @@ combined.to_csv("data/Scratch Off All Data.csv",index=False)
 
 
 #now = datetime.now().strftime("%Y-%m-%d %H_%M_%S")
-df.to_csv('data/Scratch off Data.csv', mode='a')
+df.to_csv('data/Scratch off Data.csv', mode='a', header=False)
 
 
 # In[42]:
@@ -446,11 +419,91 @@ rep.sort_values(by=['% Game Completed','% Money Used'], ascending=[False,True])
 # In[85]:
 
 
-rep['Runtime'] = datetime.now().strftime("%Y-%m-%d %H_%M_%S")
+rep['Runtime'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # In[87]:
 
 
-rep.to_csv("data/Scratch Off Scrape Report.csv", mode='a')
+rep.to_csv("data/Scratch Off Scrape Report.csv", mode='a', header=False)
 
+print(rep)
+
+
+
+scratchoff = rep
+scratchoff.reset_index(inplace=True)
+
+
+
+sql_query = "INSERT INTO scratchoff (prizeTickets,prizeRemain,percentWinners,percentGameCompleted,tickets,startDate,price,zeroCount,remainingMoney,moneyUsed,runtime,name) VALUES"
+name_col = "Unnamed: 0"
+if name_col not in scratchoff.columns:
+    name_col = "index"
+print(scratchoff.columns)
+scratchoff[name_col] = scratchoff[name_col].astype(str)
+scratchoff[name_col] = scratchoff[name_col].str.replace("\'",'')
+scratchoff.Price = scratchoff.Price.astype(str)
+scratchoff.Price = scratchoff.Price.str.replace("$",'')
+scratchoff['Start Date'] = pd.to_datetime(scratchoff['Start Date'])
+int_cols = ["Prize Tickets", 'Prize Remain', 'Tickets', 'Count of 0s', "Remaining Money"]
+for int_col in int_cols:
+    scratchoff[int_col] = scratchoff[int_col].astype(int)
+
+floats = ["% Winners", "% Game Completed", "% Money Used", "Price"]
+for f in floats:
+    scratchoff[f] = scratchoff[f].astype(float)
+
+#scratchoff.Runtime = scratchoff.Runtime.astype(str)
+#scratchoff.Runtime = scratchoff.Runtime.apply(lambda x: x.split(' ')[0])
+
+scratchoff['Runtime'] = pd.to_datetime(scratchoff['Runtime'], format="%Y-%m-%d")
+
+print(scratchoff.head())
+
+for i in scratchoff.index:
+    #print(scratchoff.loc[i,:])
+    new_row = " (\'{}\', \'{}\', \'{}\', \'{}\', \'{}\', \'{}\', \'{}\', \'{}\', \'{}\', \'{}\', \'{}\', \'{}\'), ".format(
+        scratchoff.loc[i, "Prize Tickets"],
+        scratchoff.loc[i, "Prize Remain"],
+        scratchoff.loc[i, "% Winners"],
+        scratchoff.loc[i, "% Game Completed"],
+        scratchoff.loc[i, "Tickets"],
+        scratchoff.loc[i, "Start Date"],
+        scratchoff.loc[i, "Price"],
+        scratchoff.loc[i, "Count of 0s"],
+        scratchoff.loc[i, "Remaining Money"],
+        scratchoff.loc[i, "% Money Used"],
+        scratchoff.loc[i, "Runtime"],
+        scratchoff.loc[i, name_col],
+    )
+    sql_query += new_row
+
+    
+sql_query=sql_query[:-2]+";"
+
+try:
+    
+
+    connection = mysql.connector.connect(host=credentials["host"],
+                                        database=credentials['database'],
+                                        user=credentials['user'],
+                                        password=credentials['password'])
+    
+    if connection.is_connected():
+        db_Info = connection.get_server_info()
+        print("Connected to MySQL Server version ", db_Info)
+        cursor = connection.cursor()
+        cursor.execute(sql_query)
+        connection.commit()
+        print(cursor.rowcount, "Record inserted successfully into Laptop table")
+        #record = cursor.fetchone()
+        print("You're connected to database: ", record)
+
+except Error as e:
+    print("Error while connecting to MySQL", e)
+finally:
+    if connection.is_connected():
+        cursor.close()
+        connection.close()
+        print("MySQL connection is closed")
